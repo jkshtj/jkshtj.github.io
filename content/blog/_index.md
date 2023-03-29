@@ -1,6 +1,6 @@
 +++
-title = "List of blog posts"
+paginate_by = 7
+title = "Blog"
+path = "blog"
 sort_by = "date"
-template = "blog.html"
-page_template = "blog-page.html"
 +++

@@ -1,5 +1,8 @@
+title = "Blog"
+description = "Kshitij Jain's personal blog."
+
 # The URL the site will be built for
-base_url = "https://example.com"
+base_url = "https://jkshtj.github.io"
 
 # Whether to automatically compile all Sass files in the sass directory
 compile_sass = true
@@ -7,10 +10,26 @@ compile_sass = true
 # Whether to build a search index to be used later on by a JavaScript library
 build_search_index = false
 
+theme = "apollo"
+generate_feed = true
+render_emoji = true
+
+# Various slugification strategies, see below for details
+# Defaults to everything being a slug
+[slugify]
+anchors = "on"
+
 [markdown]
-# Whether to do syntax highlighting
-# Theme can be customised by setting the `highlight_theme` variable to a theme supported by Zola
-highlight_code = false
+highlight_code = true
+highlight_theme = "ayu-dark"
 
 [extra]
-# Put all your custom variables here
+menu = [
+    { name = "/about", url = "/about", weight = 1 },
+    { name = "/blog", url = "/blog", weight = 2 },
+]
+
+socials = [
+    { name = "linkedin", url = "https://www.linkedin.com/in/kshit/", icon = "linkedin" },
+    { name = "github", url = "https://github.com/jkshtj", icon = "github" },
+]
