@@ -1,10 +1,14 @@
 +++
 title = "Adding a new target/object backend to LLVM JITLink"
 date = "2023-03-28"
+[taxonomies]
+tags = ["llvm", "compilers", "jit linking"]
 +++
+
 ---
 > Also published on the [LLVM blog](https://blog.llvm.org/posts/2023-03-16-adding-new-llvm-jitlink-target-object-backend/)!
 ---
+
 ## Motivation
 
 For the last year, I have been contributing to [LLVM JITLink](https://llvm.org/docs/JITLink.html). This post aims to

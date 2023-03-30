@@ -14,6 +14,10 @@ theme = "apollo"
 generate_feed = true
 render_emoji = true
 
+taxonomies = [
+    { name = "tags", render = true }
+]
+
 # Various slugification strategies, see below for details
 # Defaults to everything being a slug
 [slugify]
