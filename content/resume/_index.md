@@ -1,3 +1,3 @@
 +++
-redirect_to = "https://jkshtj.github.io/resume/resume.pdf"
+redirect_to = "resume/resume.pdf"
 +++
