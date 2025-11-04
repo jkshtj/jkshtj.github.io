@@ -19,7 +19,7 @@ Given a function call-site, if the callee takes a closure as an input argument a
 5. Getting rid of the closure creation (the partial_apply now in the cloned callee) altogether via peephole optimizations.
 
 Using this optimization, SIL code like this:
-```
+```c
 sil [noinline] @takes_closure : $@convention(thin) (Int, @owned @callee_owned (Int) -> Int) -> () {
 bb0(%0: $Int, %1: $@callee_owned (Int) -> Int):
   %4 = apply %1(%0) : $@callee_owned (Int) -> Int
@@ -45,7 +45,7 @@ bb0(%0 : $Int):
 ```
 
 Will look like this:
-```
+```c
 sil shared [noinline] @specialized_takes_closure : $@convention(thin) (Int, Int) -> () {
 // %0                                             // user: %5
 // %1                                             // user: %3
@@ -417,7 +417,7 @@ We will be replacing the 2 kinds of closures mentioned above with the values tha
 > Note - There's a concrete example coming up shortly but, both kinds of closures mentioned above may close over other closures. To represent information for those cases we will actually have a list of lists of types of values to represent closed-over values. 
 
 We will be storing this information in the below types.
-```c++=
+```c
 struct ClosureInfo {
   // List of lists to account for cases where 
   // top-level and opaque closures close over other
@@ -592,7 +592,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 		``` 
 
 		To -
-		```
+		```c
 		sil private @$s4test3foo1xS2f_tFTJpSpSr : $@convention(thin) (Float, @owned _AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0, @owned @callee_guaranteed (Float) -> (Float, Float), (Float, Float)) -> Float {
 		bb0(%0 : $Float, %1 : $_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0, %2 : $@callee_guaranteed (Float) -> (Float, Float), %3: (Float, Float)):
 			%4 = tuple_extract %3: (Float, Float), 0
@@ -608,7 +608,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 		1. Generate a map `pai_to_tt`, from the `PartialApplyInst`s to the full `Type` of the tuple they are stored in.
 			1. This map, in combination with `tt_to_bbid` (described below) will be used to derive [B].
 			2. Below is an example that shows the state of `pai_to_tt` for some example VJP basic-blocks.
-				```
+				```c
 				bb1:
 				  ...
 		 		  // function_ref closure #1 in static Float._vjpMultiply(lhs:rhs:)
@@ -640,7 +640,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 		2. Generate a map `tt_to_bbid`, from the input tuple-type of a basic block in the pullback to the basic block id.
 			1. This map, in combination with `pai_to_tt` (described above) will be used to derive [B]. 
 			2. This map will only include basic blocks whose inputs look as below -
-				```
+				```c
 				(
 					// First argument is the predecessor enum
 					predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0, 
@@ -651,7 +651,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 				``` 
 			3. bb0 will be excluded as it will be handled by the steps for top-level closures.
 			4. Below is an example that shows the state of `tt_to_bbid` for some example pullback basic-blocks.
-				```
+				```c
 				bb0(%0 : $Float, %1 : $_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0, %2 : $@callee_guaranteed (Float) -> (Float, Float)):
 					...
 				bb1(%19 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float))): // Preds: bb0
@@ -672,14 +672,14 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 		
 		3. Generate a map `orig_to_spec_enum`, from the old branch-trace enum to the new branch-trace enum.
 			1. Signature -
-				```
+				```c
 				map<EnumDecl *, EnumDecl *> orig_to_spec_enum;
 				```
 			2. Given an original branch-trace enum + case, this map can help us determine the payload type of the corresponding specialized branch-trace enum + case.
 
 		4. Update the specialized pullback to use the specialized branch-trace enums and case payloads. There will be 4 cases here.
 			1. Function input
-				```
+				```c
 				// From original branch-trace enum
 				sil private @$s4test3foo1xS2f_tFTJpSpSr : $@convention(thin) (Float, @owned _AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0, (Float, Float)) -> Float
 
@@ -688,7 +688,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 				sil private @$s4test3foo1xS2f_tFTJpSpSr : $@convention(thin) (Float, @owned _AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0_spec, (Float, Float)) -> Float
 				```
 			2. Basic-block inputs
-				```
+				```c
 				// From original branch-trace enum
 				bb1(%19 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float))): // Preds: bb0
 
@@ -697,7 +697,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 				bb1(%19 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0_spec, Float, Float, (Float, Float)): // Preds: bb0
 				```
 			3. `switch_enum` basic-block terminators
-				```
+				```c
 				// From original branch-trace enum
 				switch_enum %1 : $_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0, case #_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0.bb2!enumelt: bb1, case #_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0.bb1!enumelt: bb2 // id: %18
 
@@ -705,7 +705,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 				switch_enum %1 : $_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0_spec, case #_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0_spec.bb2!enumelt: bb1, case #_AD__$s4test3foo1xS2f_tF_bb3__Pred__src_0_wrt_0_spec.bb1!enumelt: bb2 // id: %18
 				```
 			4. `br` basic-block terminators
-				```
+				```c
 				// From original branch-trace enum
 				%69 = unchecked_enum_data %40 : $_AD__$s4main3foo1xS2f_tF_bb5__Pred__src_0_wrt_0, #_AD__$s4main3foo1xS2f_tF_bb5__Pred__src_0_wrt_0.bb3!enumelt // user: %70
 				br bb8(%49 : $Builtin.FPIEEE32, %67 : $Float, %69 : $(predecessor: _AD__$s4main3foo1xS2f_tF_bb3__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float)) // id: %70
@@ -724,7 +724,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 			>	4. **[D]** Location in this basic block where the `PartialApplyInst` will be moved to.
 			1. Determine [B] using [A], `pai_to_tt` and `tt_to_bbid`.
 			2. First N instructions in [B], where N is the number of input parameters, destructure the input tuple, from 0th or 1st to the Nth element.
-				```
+				```c
 				bb2(%47 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float))): // Preds: bb0
 				  %48 = tuple_extract %47 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float)), 1 // users: %70, %69
 				  %49 = tuple_extract %47 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb1__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> Float, @callee_guaranteed (Float) -> (Float, Float)), 2 // users: %65, %64
@@ -738,7 +738,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 				3. Modify the closure's original first use - an apply instruction, to use the result of the newly created partial apply.
 		6. Below is an example showing the state of a pullback basic-block after the application of the above steps.
 			1. From this -
-				```
+				```c
 				bb1(%6 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float)): // Preds: bb0
 				  %7 = tuple_extract %6 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0, @callee_guaranteed (Float) -> Float), 1 // user: %8
 				  %8 = apply %7(%0) : $@callee_guaranteed (Float) -> Float // user: %9
@@ -748,7 +748,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 				  br bb3(%11 : $Float)                            // id: %13
 				```
 			2. To this -
-				```
+				```c
 				bb1(%6 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0_spec, Float): // Preds: bb0
 				  %7 = tuple_extract %6 : $(predecessor: _AD__$s4test3foo1xS2f_tF_bb2__Pred__src_0_wrt_0_spec, Float, 1 // user: %8
 				  // function_ref closure #1 in _vjpSin(_:)
@@ -767,7 +767,7 @@ map<(branch-trace enum, case, index), ClosureInfo> OpaqueClosureInfo;
 			1. During code motion, the entire chain of closures will need to be moved from the VJP to the pullback.
 			2. The corresponding closed-over arguments that will be created for such closures will be the arguments that the first closure in the chain closes over.
 
-#### Post-pptimization steps
+#### Post-optimization steps
 1. Peephole optimizations to get rid of any partial applies moved to the cloned callee.
 2. Peephole optimizations to get rid of any dead instructions in the caller or the cloned callee.
 

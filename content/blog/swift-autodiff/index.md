@@ -504,19 +504,12 @@ Thank you for reading!
 
 [^2]: While in our example the original function is indeed built only on axiomatic differentiation rules, in real Swift AD code a user-defined differentiable function can be built using other user-defined differentiable functions, and so on. 
 
-[^3]: **What is a Jacobian**?
-    Let's say you have a function `z1 = f(x)`. There's just one derivative that you can calculate for `z1`: `dz/dx)`, which represents the rate of change of `z1` w.r.t `x`.
+[^3]: **What is a Jacobian**: Let's say you have a function `z1 = f(x)`. There's just one derivative that you can calculate for `z1`: `dz/dx)`, which represents the rate of change of `z1` w.r.t `x`. Now let's say you have a function `z2 = f(x1, x2)`. There's 2 derivatives that you can calculate for `z2`: `d(z2)/dx1` and `d(z2)/dx2`, which represent the rate of change of `z2` w.r.t `x1` and `x2`. `d(z2)/dx1` and `d(z2)/dx2` are `z2`'s partial derivatives. Now, let's say you have a function `z3 => (y1, y2) = f(x1, x2)`. `z3` has 2 inputs as well as 2 outputs. To fully differentiate `z3`, you will need to calculate the partial derivatives w.r.t `y1` and `y2`. The derivative of `z3` can then be written in matrix form as follows -
 
-    Now let's say you have a function `z2 = f(x1, x2)`. There's 2 derivatives that you can calculate for `z2`: `d(z2)/dx1` and `d(z2)/dx2`, which represent the rate of change of `z2` w.r.t `x1` and `x2`. `d(z2)/dx1` and `d(z2)/dx2` are `z2`'s partial derivatives.
-
-    Now, let's say you have a function `z3 => (y1, y2) = f(x1, x2)`. `z3` has 2 inputs as well as 2 outputs. To fully differentiate `z3`, you will need to calculate the partial derivatives w.r.t `y1` and `y2`. The derivative of `z3` can then be written in matrix form as follows -
-
-    ```
+```c
     [
         [ d(y1)/dx1, d(y1)/dx2 ], // partial derivatives w.r.t y1
         [ d(y2)/dx1, d(y2)/dx2 ] // partial derivatives w.r.t y2
     ]
-    ```
-    The above matrix is a Jacobian. It is literally just a representational form of the partial derivatives of a multivariate function with one or more outputs[^4].
-    
-[^4]: Hello
+``` 
+The above matrix is a Jacobian. It is literally just a representational form of the partial derivatives of a multivariate function with one or more outputs[^4].
