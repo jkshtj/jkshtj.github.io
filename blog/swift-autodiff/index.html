@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    
+    
+    
+    <title>
+        Swift Automatic Differentiation: On the Other Side of the Compiler
+    </title>
+    
+
+    
+    
+
+    
+    
+        <link href=https://jkshtj.github.io/fonts.css rel="stylesheet" />
+    
+
+    
+    
+
+
+    
+
+    
+    <link rel="alternate" type="application/atom+xml" title="Blog" href="https://jkshtj.github.io/atom.xml">
+
+    
+    
+    
+        <link rel="stylesheet" type="text/css" href="https://jkshtj.github.io/theme/light.css"/>
+    
+
+    <link rel="stylesheet" type="text/css" media="screen" href=https://jkshtj.github.io/main.css />
+
+
+    
+</head>
+
+
+<body>
+    <div class="content">
+        <header>
+    <div class="main">
+        <div class="socials">
+            
+                <a rel="me" href="https:&#x2F;&#x2F;www.linkedin.com&#x2F;in&#x2F;kshit&#x2F;" class="social">
+                    <img alt=linkedin src="/social_icons/linkedin.svg">
+                </a>
+            
+                <a rel="me" href="https:&#x2F;&#x2F;github.com&#x2F;jkshtj" class="social">
+                    <img alt=github src="/social_icons/github.svg">
+                </a>
+            
+        </div>
+    </div>
+
+    <nav>
+        
+            <a href=&#x2F;about style="margin-left: 0.7em">&#x2F;about</a>
+        
+            <a href=&#x2F;blog style="margin-left: 0.7em">&#x2F;blog</a>
+        
+            <a href=&#x2F;resume&#x2F;resume.pdf style="margin-left: 0.7em">&#x2F;resume</a>
+        
+    </nav>
+</header>
+
+
+        
+        
+    <script type="text/javascript">
+        // The DOMContentLoaded event fires when the initial HTML
+        // document has been completely loaded and parsed, without
+        // waiting for stylesheets, images, and subframes to finish loading.
+        document.addEventListener('DOMContentLoaded', (_event) => {
+            const references = document.getElementsByClassName('footnote-reference')
+            // For each footnote reference, set an id so we can refer to it from the definition.
+            // If the definition had an id of 'some_id', then the reference has id `some_id_ref`.
+            for (const reference of references) {
+                const link = reference.firstChild
+                const id = link.getAttribute('href').slice(1) // skip the '#'
+                link.setAttribute('id', `${id}_ref`)
+            }
+
+            const footnotes = document.getElementsByClassName('footnote-definition')
+            // For each footnote-definition, add an anchor element with an href to its corresponding reference.
+            // The text used for the added anchor is 'Leftwards Arrow with Hook' (U+21A9).
+            for (const footnote of footnotes) {
+                const id = footnote.getAttribute('id')
+                const backReference = document.createElement('a')
+                backReference.setAttribute('href', `#${id}_ref`)
+                backReference.textContent = '↩'
+                footnote.append(backReference)
+            }
+        });
+    </script>
+
+    
+<main>
+    <article>
+        <div class="title">
+            
+            
+    <div class="page-header">
+        Swift Automatic Differentiation: On the Other Side of the Compiler<span class="primary-color" style="font-size: 1.6em"></span>
+    </div>
+
+
+                <div class="meta">
+                    
+                        Posted on <time>2024-03-18</time>
+                    
+
+                    
+                </div>
+        </div>
+
+        
+
+        
+            <br>
+            <div class="post-tags">
+                <nav class="nav tags">
+                    
+                        <a href=https://jkshtj.github.io/tags/swift/>#swift</a>
+                    
+                        <a href=https://jkshtj.github.io/tags/autodiff/>#autodiff</a>
+                    
+                        <a href=https://jkshtj.github.io/tags/differentiable-swift/>#differentiable swift</a>
+                    
+                </nav>
+            </div>
+            <br>
+        
+
+        
+        
+
+        <section class="body">
+            <blockquote>
+<p>While working on Differentiable Swift at PassiveLogic, I wished I had a single resource that would help me develop a mathematical intuition for AD and a tangible understanding of a &quot;differentiated&quot; function in the Swift compiler. I planned on writing a series of posts, aiming to achieve that retrospective end, but only ever got to writing this one post, I thought it could still serve as a straightforward, introductory read for anyone interested in the internals of Swift AD.</p>
+</blockquote>
+<p>We will build this post on a single, simple differentiable math function - <code>f(x) = sin(x) * cos(x)</code>. We will begin by understanding how <code>f(x)</code> can be automatically differentiated by hand. Then we will look at pseudo-<a href="https://github.com/apple/swift/blob/main/docs/SIL.rst">SIL</a> code with the goal to observe that the compiler is very much doing the exact same stuff, that we did by hand, to automatically differentiate a function. Finally, we will briefly look at real SIL code to demonstrate that it's not all that different from the psuedo-SIL code we looked at previously. </p>
+<p>By the end of this post, hopefully, we would have demystified AD and Swift compiler generated derivatives. <strong>Note</strong>, that this post assumes that the reader is familiar with the Swift AutoDiff API. If not, I recommend reading or atleast skimming through the <a href="https://github.com/apple/swift/blob/main/docs/DifferentiableProgramming.md">Swift AutoDiff manifesto</a>.</p>
+<blockquote>
+<p>Here's a quick ELI5 version of AD to establish a simple understanding of it, for our purpose. </p>
+<p>Automatic Differentiation is, well, just Differentiation! It is an algorithmic approach to evaluate gradients<sup class="footnote-reference"><a href="#1">1</a></sup> of functions that are implemented in the form of computer programs. The reason of its existence or the &quot;cause&quot; of which it is an &quot;effect&quot; is the fact that all differentiable equations are built upon a fixed set of axiomatic<sup class="footnote-reference"><a href="#2">2</a></sup> rules. Any differentiable equation, no matter how complex, can therefore be broken down and expressed as a combination of these rules. </p>
+<p>That might sound really hand-wavy! We know computer programs are not all just math equations, which can be expressed as a series of function applications. They're more complex than that and may consist of control flow statements, memory accesses, print statements etc. Well AD, at least in Swift, comes with a set of specific stipulations, which reduces the set of automatically differentiable programs to one containing programs that look very much like broken down math equations. There's still control-flow, memory accesses and other non-math stuff that remains but it is out of scope for this post.</p>
+</blockquote>
+<h2 id="ad-by-hand">AD by hand</h2>
+<blockquote>
+<p>Note: There's multiple ways to notate derivatives. The one I will be using in this post looks as follows:</p>
+<ol>
+<li>For a function <code>f(x)</code>, its derivative w.r.t <code>x</code> will be represented by <code>f'(x)</code> or <code>df(x)/dx</code>.</li>
+<li>For a variable <code>y</code>, its derivative w.r.t <code>x</code> will be represented by <code>y'</code> or <code>dy/dx</code>.</li>
+</ol>
+</blockquote>
+<p>There's 2 kinds of AD - <strong>Forward</strong> and <strong>Reverse</strong>. Forward AD is what you've probably already done, if you have ever differentiated a function at all. I'm not going to confuse you by saying anything more. Reverse AD, and really even the differentiation b/w Forward and Reverse AD, is only of consequence when you are dealing with a multivariate function with one or more outputs (although for the purpose of our post we will actually be able to get away with using a single variable function with a single output). What I will say about Reverse AD though is that:</p>
+<ol>
+<li>It works because of <a href="https://en.wikipedia.org/wiki/Chain_rule">chain rule</a>. How? That should be clear shortly!</li>
+<li>It involves performing &quot;a step&quot; explicitly, that is implicitly performed in Forward AD. 
+<ul>
+<li>For a function <code>y = f(x)</code>, if we wanted to find <code>dy/dx</code>, what we implicitly do in Forward AD is seed the value of <code>dx/dx</code> and set it to 1.</li>
+<li>In Reverse AD we seed the value of <code>dy/dy</code> and set it to 1 (technically the seed value can be anything in both cases, but for our purpose we will assume it's always 1). </li>
+<li>Intuitively, the seed means the same thing in both cases - the rate of change of something w.r.t itself is always 1 or a small change in a value <code>t</code> will lead to an equal amount of change in the value <code>t</code>.</li>
+<li>Without the abovementioned seeding, you cannot actually compute derivatives. For instance the derivative of <code>f(x) = sin(x)</code> is <code>dsin(x)/dx * dx/dx</code> (see <a href="https://en.wikipedia.org/wiki/Chain_rule">chain rule</a> again, if it's not obvious why). You probably know that <code>dsin(x)/dx = cos(x)</code>. But you cannot find the final answer without knowing what <code>dx/dx</code> is.</li>
+</ul>
+</li>
+<li>A new concept - Jacobian<sup class="footnote-reference"><a href="#3">3</a></sup>, also becomes important when there is an actual difference b/w Forward and Reverse AD. </li>
+</ol>
+<p>Okay, I'm done sneaking in informational titbits. Let's now get to differentiating our star function <code>f(x) = sin(x) * cos(x)</code> w.r.t <code>x</code>, by hand.</p>
+<h3 id="forward-ad">Forward AD</h3>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span>y </span><span style="color:#f29668;">= </span><span style="color:#ffb454;">f</span><span>(x) </span><span style="color:#f29668;">= </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Seed
+</span><span>dx</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">= </span><span style="color:#f29718;">1
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// In Forward AD we know the derivative of the input w.r.t 
+</span><span style="font-style:italic;color:#5c6773;">// itself: dx/dx, and we derive the derivative of the output
+</span><span style="font-style:italic;color:#5c6773;">// w.r.t the input: dy/dx.
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// 1. Break down f(x) into a series of steps w/ each 
+</span><span style="font-style:italic;color:#5c6773;">// step representing a simple function that is axiomatically
+</span><span style="font-style:italic;color:#5c6773;">// differentiable. 
+</span><span>w0 </span><span style="color:#f29668;">= </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="font-style:italic;color:#5c6773;">// sine rule
+</span><span>w1 </span><span style="color:#f29668;">= </span><span style="color:#f07178;">cos</span><span>(x) </span><span style="font-style:italic;color:#5c6773;">// cosine rule
+</span><span>w2 </span><span style="color:#f29668;">=</span><span> w0 </span><span style="color:#f29668;">*</span><span> w1 </span><span style="font-style:italic;color:#5c6773;">// product rule
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// 2. Calculate the derivative of each of the intermediate
+</span><span style="font-style:italic;color:#5c6773;">// variables w.r.t x.
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">// Note - Derivatives are written in square brackets beside
+</span><span style="font-style:italic;color:#5c6773;">// the original value.
+</span><span>w0 </span><span style="color:#f29668;">= </span><span style="color:#f07178;">sin</span><span>(x)        [ dw0</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">= </span><span style="color:#f07178;">cos</span><span>(x) ]
+</span><span>w1 </span><span style="color:#f29668;">= </span><span style="color:#f07178;">cos</span><span>(x)        [ dw1</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">= -</span><span style="color:#f07178;">sin</span><span>(x) ]
+</span><span>w2 </span><span style="color:#f29668;">=</span><span> w0 </span><span style="color:#f29668;">*</span><span> w1       [ dw2</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">=</span><span> dw0</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">*</span><span> w1 </span><span style="color:#f29668;">+</span><span> w0 </span><span style="color:#f29668;">*</span><span> dw1</span><span style="color:#f29668;">/</span><span>dx ]
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// 3. Now if we substitute the intermediate variables and
+</span><span style="font-style:italic;color:#5c6773;">// the partial derivatives in dw2/dx with their actual 
+</span><span style="font-style:italic;color:#5c6773;">// values, we will get the derivative of w2, which is just
+</span><span style="font-style:italic;color:#5c6773;">// the derivative of y or f(x).
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">=</span><span> dw2</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">=</span><span> dw0</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">*</span><span> w1 </span><span style="color:#f29668;">+</span><span> w0 </span><span style="color:#f29668;">*</span><span> dw1</span><span style="color:#f29668;">/</span><span>dx
+</span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">cos</span><span>(x) </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x) </span><span style="color:#f29668;">+ </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x)
+</span><span style="color:#f29668;">=&gt;</span><span> cos</span><span style="color:#f29668;">^</span><span style="color:#f29718;">2</span><span>(x) </span><span style="color:#f29668;">-</span><span> sin</span><span style="color:#f29668;">^</span><span style="color:#f29718;">2</span><span>(x)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// And that&#39;s that! We&#39;re done with performing Forward AD 
+</span><span style="font-style:italic;color:#5c6773;">// by hand on f(x).
+</span></code></pre>
+<h3 id="reverse-ad">Reverse AD</h3>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span>y </span><span style="color:#f29668;">= </span><span style="color:#ffb454;">f</span><span>(x) </span><span style="color:#f29668;">= </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Seed
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dy </span><span style="color:#f29668;">= </span><span style="color:#f29718;">1
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// In Reverse AD we know the derivative of the output w.r.t 
+</span><span style="font-style:italic;color:#5c6773;">// itself: dy/dy, and we derive the derivative of the output
+</span><span style="font-style:italic;color:#5c6773;">// w.r.t the input: dy/dx.
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">// 1 &amp; 2. Repeat (1) and (2) from Forward AD after which point
+</span><span style="font-style:italic;color:#5c6773;">// we would have gone through the series of simple functions 
+</span><span style="font-style:italic;color:#5c6773;">// representing our original function and would have calculated 
+</span><span style="font-style:italic;color:#5c6773;">// the derivative of each of the intermediate variables w.r.t x.
+</span><span>w0 </span><span style="color:#f29668;">= </span><span style="color:#f07178;">sin</span><span>(x)        [ dw0</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">= </span><span style="color:#f07178;">cos</span><span>(x) ]
+</span><span>w1 </span><span style="color:#f29668;">= </span><span style="color:#f07178;">cos</span><span>(x)        [ dw1</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">= -</span><span style="color:#f07178;">sin</span><span>(x) ]
+</span><span>w2 </span><span style="color:#f29668;">=</span><span> w0 </span><span style="color:#f29668;">*</span><span> w1       [ dw2</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">=</span><span> dw0</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">*</span><span> w1 </span><span style="color:#f29668;">+</span><span> w0 </span><span style="color:#f29668;">*</span><span> dw1</span><span style="color:#f29668;">/</span><span>dx ]
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// 3. Now find the derivative of y w.r.t each of the intermediate
+</span><span style="font-style:italic;color:#5c6773;">// variables - w2, w1 &amp; w0.
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// w2 is just y written in another form
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">= </span><span style="color:#f29718;">1
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Chain rule!
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">// If you have a variable t(u(v)) which depends on u which,
+</span><span style="font-style:italic;color:#5c6773;">// in its turn, depends on v, then:
+</span><span style="font-style:italic;color:#5c6773;">// dt/dv = dt/du * du/dv
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">// We want to differentiate y w.r.t to w1, but y depends 
+</span><span style="font-style:italic;color:#5c6773;">// on w2, which in turn depends on w1. So for dy/dw1, we 
+</span><span style="font-style:italic;color:#5c6773;">// have -
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dw1 </span><span style="color:#f29668;">=</span><span> dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">*</span><span> dw2</span><span style="color:#f29668;">/</span><span>dw1
+</span><span style="color:#f29668;">=&gt; </span><span style="color:#f29718;">1 </span><span style="color:#f29668;">*</span><span> w0
+</span><span style="color:#f29668;">=&gt;</span><span> w0
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Chain rule
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dw0 </span><span style="color:#f29668;">=</span><span> dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">*</span><span> dw2</span><span style="color:#f29668;">/</span><span>dw0
+</span><span style="color:#f29668;">=&gt; </span><span style="color:#f29718;">1 </span><span style="color:#f29668;">*</span><span> w1
+</span><span style="color:#f29668;">=&gt;</span><span> w1
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// 4. Now, try and find dy/dx. Can we find it using the above
+</span><span style="font-style:italic;color:#5c6773;">// calculated derivatives and chain rule (yet again!)? 
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">// I think we can. y depends on w2, which depends on w1 and w0,
+</span><span style="font-style:italic;color:#5c6773;">// both of which depend on x. It looks similar to the situations
+</span><span style="font-style:italic;color:#5c6773;">// that we tackled above.
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">=</span><span> dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">*</span><span> dw2</span><span style="color:#f29668;">/</span><span>dw1 </span><span style="color:#f29668;">*</span><span> dw1</span><span style="color:#f29668;">/</span><span>dx
+</span><span>                   </span><span style="color:#f29668;">+
+</span><span>        dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">*</span><span> dw2</span><span style="color:#f29668;">/</span><span>dw0 </span><span style="color:#f29668;">*</span><span> dw0</span><span style="color:#f29668;">/</span><span>dx
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// If we now substitute the derivatives we calculated above,
+</span><span style="font-style:italic;color:#5c6773;">// in dy/dx, we have our answer - the derivative of y w.r.t x. 
+</span><span style="font-style:italic;color:#5c6773;">// But...a few things before we do that.
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">//   i) What&#39;s up with the &#39;+&#39; in dy/dx?
+</span><span style="font-style:italic;color:#5c6773;">//    
+</span><span style="font-style:italic;color:#5c6773;">//      A simple intuition behind the addition is that the derivative 
+</span><span style="font-style:italic;color:#5c6773;">//      of a function w.r.t a variable t depends on all the terms
+</span><span style="font-style:italic;color:#5c6773;">//      where t appears. 
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">//      So, in our case, dy/dx OR the change in y that happens due to
+</span><span style="font-style:italic;color:#5c6773;">//      a small change in x is going to depend on all terms where 
+</span><span style="font-style:italic;color:#5c6773;">//      x appears in the equation of y: sin(x) and cos(x).
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">//  ii) Note that we used dw1/dx and dw0/dx to find dy/dx. 
+</span><span style="font-style:italic;color:#5c6773;">//      
+</span><span style="font-style:italic;color:#5c6773;">//      I bring this up to highlight that the &quot;Forward AD like&quot; steps
+</span><span style="font-style:italic;color:#5c6773;">//      that we performed for Reverse AD, were performed for a 
+</span><span style="font-style:italic;color:#5c6773;">//      purpose. And Reverse AD can be thought to have 2 &quot;phases&quot; or 
+</span><span style="font-style:italic;color:#5c6773;">//      &quot;passes&quot; - forward &amp; reverse.
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">// iii) Why is the equation of dy/dx different in Forward AD vs Reverse AD?
+</span><span style="font-style:italic;color:#5c6773;">//      
+</span><span style="font-style:italic;color:#5c6773;">//      Actually, they&#39;re both the same. In Reverse AD we have -
+</span><span style="font-style:italic;color:#5c6773;">//      dy/dx = dy/dw2 * dw2/dw1 * dw1/dx
+</span><span style="font-style:italic;color:#5c6773;">//                       +
+</span><span style="font-style:italic;color:#5c6773;">//             dy/dw2 * dw2/dw0 * dw0/dx
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">//      `dy/dw2 * dw2/dw1` and `dy/dw2 * dw2/dw0` are just the 
+</span><span style="font-style:italic;color:#5c6773;">//      derivatives of dy/dw1 and dy/dw0, which we calculated in
+</span><span style="font-style:italic;color:#5c6773;">//      (3) - `dy/dw1 = w0` and `dy/dw0 = w1`. Now if we substitute these
+</span><span style="font-style:italic;color:#5c6773;">//      values back in the dy/dx for Reverse AD we get -
+</span><span style="font-style:italic;color:#5c6773;">//      dy/dx = w0 * dw1/dx + w1 * dw0/dx. This is the exact same equation
+</span><span style="font-style:italic;color:#5c6773;">//      of dy/dx, that we got in Forward AD.
+</span><span>
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Ok, now we can continue with (4) and substitute the above calculated
+</span><span style="font-style:italic;color:#5c6773;">// derivatives in dy/dx.
+</span><span>dy</span><span style="color:#f29668;">/</span><span>dx </span><span style="color:#f29668;">=</span><span> dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">*</span><span> dw2</span><span style="color:#f29668;">/</span><span>dw1 </span><span style="color:#f29668;">*</span><span> dw1</span><span style="color:#f29668;">/</span><span>dx
+</span><span>                   </span><span style="color:#f29668;">+
+</span><span>        dy</span><span style="color:#f29668;">/</span><span>dw2 </span><span style="color:#f29668;">*</span><span> dw2</span><span style="color:#f29668;">/</span><span>dw0 </span><span style="color:#f29668;">*</span><span> dw0</span><span style="color:#f29668;">/</span><span>dx
+</span><span style="color:#f29668;">=&gt; </span><span style="color:#f29718;">1 </span><span style="color:#f29668;">*</span><span> w0 </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">+ </span><span style="color:#f29718;">1 </span><span style="color:#f29668;">*</span><span> w1 </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">+ </span><span style="color:#f07178;">cos</span><span>(x) </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span style="color:#f29668;">=&gt;</span><span> cos</span><span style="color:#f29668;">^</span><span style="color:#f29718;">2</span><span>(x) </span><span style="color:#f29668;">-</span><span> sin</span><span style="color:#f29668;">^</span><span style="color:#f29718;">2</span><span>(x)
+</span></code></pre>
+<h2 id="psuedo-sil-for-the-derivatives-of-f-x">Psuedo-SIL for the derivatives of <code>f(x)</code></h2>
+<p>When asked to differentiate a Swift function, the Swift compiler generates 2 SIL functions each for both Forward and Reverse AD - one that performs the actual differentiation of the original function and another that is the resulting derivative of the original function. For the purpose of this section, the differentiating functions will use the prefix <code>do_</code> and the derivatives will use the prefix <code>df_</code>. </p>
+<p>For our main function <code>y = f(x) = sin(x) * cos(x)</code>, here's what the Forward and Reverse mode functions look like in pseudo-SIL.</p>
+<h4 id="forward-mode">Forward mode</h4>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span style="font-style:italic;color:#5c6773;">// Inputs -
+</span><span style="font-style:italic;color:#5c6773;">// 1. Same as the input to the original function
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">// Outputs -
+</span><span style="font-style:italic;color:#5c6773;">// 1. The result of the original function
+</span><span style="font-style:italic;color:#5c6773;">// 2. The derivative function
+</span><span>sil @do_fwd_f </span><span style="color:#f29668;">:</span><span> $(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">, </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) {
+</span><span style="color:#ffb454;">bb0</span><span>(</span><span style="color:#f29668;">%</span><span>x)</span><span style="color:#f29668;">:
+</span><span>(</span><span style="color:#f29668;">%</span><span>w0</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_fwd_sin) </span><span style="color:#f29668;">=</span><span> apply @</span><span style="color:#ffb454;">do_fwd_sin</span><span>(</span><span style="color:#f29668;">%</span><span>x)
+</span><span>(</span><span style="color:#f29668;">%</span><span>w1</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_fwd_cos) </span><span style="color:#f29668;">=</span><span> apply @</span><span style="color:#ffb454;">do_fwd_cos</span><span>(</span><span style="color:#f29668;">%</span><span>x)
+</span><span>(</span><span style="color:#f29668;">%</span><span>w2</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_fwd_mul) </span><span style="color:#f29668;">=</span><span> apply @</span><span style="color:#ffb454;">do_fwd_mul</span><span>(</span><span style="color:#f29668;">%</span><span>w0</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>w1)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Inputs - 
+</span><span style="font-style:italic;color:#5c6773;">// 1. Value of the seed: dx/dx
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">// Outputs -
+</span><span style="font-style:italic;color:#5c6773;">// 1. Derivative of y/f(x) w.r.t x
+</span><span>df_fwd_f </span><span style="color:#f29668;">= </span><span>(</span><span style="color:#f29668;">%</span><span>seed) </span><span style="color:#f29668;">-&gt; </span><span>{
+</span><span style="color:#f29668;">%</span><span>`dw0</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#ffb454;">df_fwd_sin</span><span>(</span><span style="color:#f29668;">%</span><span>seed)
+</span><span style="color:#f29668;">%</span><span>`dw1</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#ffb454;">df_fwd_cos</span><span>(</span><span style="color:#f29668;">%</span><span>seed)
+</span><span style="color:#f29668;">%</span><span>`dw2</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#ffb454;">df_fwd_mul</span><span>(</span><span style="color:#f29668;">%</span><span>`dw0</span><span style="color:#f29668;">/</span><span>dx`</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>`dw1</span><span style="color:#f29668;">/</span><span>dx`)
+</span><span style="color:#ff7733;">return </span><span style="color:#f29668;">%</span><span>`dw2</span><span style="color:#f29668;">/</span><span>dx`
+</span><span>}
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Return tuple of original result and derivative
+</span><span style="color:#ff7733;">return </span><span>(</span><span style="color:#f29668;">%</span><span>w2</span><span style="color:#bfbab0cc;">,</span><span> df_fwd_f)
+</span><span>}
+</span></code></pre>
+<p>Let's go over the code in small chunks.</p>
+<h5 id="chunk-1">Chunk 1</h5>
+<pre data-lang="c9" style="background-color:#0f1419;color:#bfbab0;" class="language-c9 "><code class="language-c9" data-lang="c9"><span>(%w0, %df_fwd_sin) = apply @do_fwd_sin(%x)
+</span><span>(%w1, %df_fwd_cos) = apply @do_fwd_cos(%x)
+</span><span>(%w2, %df_fwd_mul) = apply @do_fwd_mul(%w0, %w1)
+</span></code></pre>
+<p>Here, we are essentially doing what we did in steps (1) &amp; (2) of by-hand Forward AD -- break down f(x) into a series of axiomatically differentiable functions and then calculate the derivative of each of the resulting intermediate variables w.r.t x.</p>
+<blockquote>
+<p>Like all functions in Swift AD, each of the axiomatically differentiable functions also has a <code>do_fwd</code> function that differentiates it and a <code>df_fwd</code> function that is the original function's derivative. All differential functions that the compiler considers axiomatic are part of the Swift standard library and have been defined <a href="https://github.com/apple/swift/tree/main/stdlib/public/Differentiation">here</a>.</p>
+</blockquote>
+<h5 id="chunk-2">Chunk 2</h5>
+<pre data-lang="c18" style="background-color:#0f1419;color:#bfbab0;" class="language-c18 "><code class="language-c18" data-lang="c18"><span>df_fwd_f = (%seed) -&gt; {
+</span><span>%`dw0/dx` = apply %df_fwd_sin(%seed)
+</span><span>%`dw1/dx` = apply %df_fwd_cos(%seed)
+</span><span>%`dw2/dx` = apply %df_fwd_mul(%`dw0/dx`, %`dw1/dx`)
+</span><span>return %`dw2/dx`
+</span><span>}
+</span></code></pre>
+<p>Next, we have the compiler generated Forward mode derivative of <code>f(x)</code>. This is very similar to what we did in step (3) of by-hand Forward AD, where we used the partial derivatives and intermediate variables to calculate the overall derivative. </p>
+<blockquote>
+<p>There is one key difference here and something to note that may not have met the eye right away.</p>
+<p>On line 19, <code>df_fwd_sin</code> is not the symbolic derivative of sin(x), it is the symbolic derivative of sin(x) evaluated at the input to the original function. Same explanations are valid for <code>df_fwd_cos</code> and <code>df_fwd_mul</code>. What this means is that the <code>do_fwd</code> function for an original function, returns the derivative of the original function evaluated at the original input. As a consequence if we wanted to find the derivative of <code>f(x)</code> at x = 2 and x = 3, we would need to call <code>do_fwd_f</code> with x = 2 and x = 3 and then use the respectively obtained derivatives to find df(x)/dx at x = 2 and x = 3.</p>
+<p>Okay, so what is <code>%seed</code>, the input of <code>df_fwd_f</code>, if not the value at which to evaluate the derivative of <code>f(x)</code>? Here, since we are performing Forward AD, it is dx/dx -- the rate of change of x w.r.t itself.</p>
+</blockquote>
+<p>We can show that the code in chunk 2 produces the same result as that of by-hand Forward AD by using the compiler known definitions for the derivatives of <a href="https://github.com/apple/swift/blob/5b8553cbe76b51b1811891b1fe83e28db1666932/stdlib/public/Differentiation/TgmathDerivatives.swift.gyb#L183C10-L183C39"><code>sin(x)</code></a>, <a href="https://github.com/apple/swift/blob/5b8553cbe76b51b1811891b1fe83e28db1666932/stdlib/public/Differentiation/TgmathDerivatives.swift.gyb#L189"><code>cos(x)</code></a> and <a href="https://github.com/apple/swift/blob/main/stdlib/public/Differentiation/FloatingPointDifferentiation.swift.gyb#L198"><code>x*y</code></a> inline.</p>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span>df_fwd_f </span><span style="color:#f29668;">= </span><span>(</span><span style="color:#f29668;">%</span><span>seed) </span><span style="color:#f29668;">-&gt; </span><span>{
+</span><span style="font-style:italic;color:#5c6773;">// As in by-hand Forward AD, let&#39;s assume that seed (dx/dx) were equal to 1
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// %df_fwd_sin = (%v) -&gt; { %v * &lt;COS OF ORIGINAL INPUT&gt; }
+</span><span style="font-style:italic;color:#5c6773;">// COS OF ORIGINAL INPUT -&gt; cos(x)
+</span><span style="color:#f29668;">%</span><span>`dw0</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">=&gt;</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#ffb454;">df_fwd_sin</span><span>(</span><span style="color:#f29668;">%</span><span>seed)
+</span><span>          </span><span style="color:#f29668;">=&gt; %</span><span>seed </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>          </span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// %df_fwd_cos = (%v) -&gt; { %v * &lt;NEGATIVE SINE OF ORIGINAL INPUT&gt; }
+</span><span style="font-style:italic;color:#5c6773;">// NEGATIVE SINE OF ORIGINAL INPUT -&gt; -sin(x)
+</span><span style="color:#f29668;">%</span><span>`dw1</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">=&gt;</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#ffb454;">df_fwd_cos</span><span>(</span><span style="color:#f29668;">%</span><span>seed)
+</span><span>          </span><span style="color:#f29668;">=&gt; %</span><span>seed </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x)
+</span><span>          </span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">sin</span><span>(x)
+</span><span>    
+</span><span style="font-style:italic;color:#5c6773;">// %df_fwd_mul = (%v1, %v2) -&gt; { &lt;ORIGINAL LHS&gt; * %v2 + &lt;ORIGINAL RHS&gt; * %v1 }
+</span><span style="font-style:italic;color:#5c6773;">// ORIGINAL LHS to the multiplication operation -&gt; sin(x)
+</span><span style="font-style:italic;color:#5c6773;">// ORIGINAL RHS to the multiplication operation -&gt; cos(x)
+</span><span style="color:#f29668;">%</span><span>`dw2</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">=&gt;</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#ffb454;">df_fwd_mul</span><span>(</span><span style="color:#f29668;">%</span><span>`dw0</span><span style="color:#f29668;">/</span><span>dx`</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>`dw1</span><span style="color:#f29668;">/</span><span>dx`)
+</span><span>          </span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">+ </span><span style="color:#f07178;">cos</span><span>(x) </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>          </span><span style="color:#f29668;">=&gt;</span><span> cos</span><span style="color:#f29668;">^</span><span style="color:#f29718;">2</span><span>(x) </span><span style="color:#f29668;">-</span><span> sin</span><span style="color:#f29668;">^</span><span style="color:#f29718;">2</span><span>(x)
+</span><span>
+</span><span style="color:#ff7733;">return </span><span style="color:#f29668;">%</span><span>`dw2</span><span style="color:#f29668;">/</span><span>dx`
+</span><span>}
+</span></code></pre>
+<h5 id="chunk-3">Chunk 3</h5>
+<pre data-lang="c26" style="background-color:#0f1419;color:#bfbab0;" class="language-c26 "><code class="language-c26" data-lang="c26"><span>return (%w2, df_fwd_f)
+</span></code></pre>
+<p>Finally, <code>do_fwd_f</code> returns the original output and the derivative of <code>f(x)</code>, for the original input, that still needs to be evaluated based on a seed value.</p>
+<blockquote>
+<p>Phew, that was long but hopefully not to hard to follow! Although Forward mode derivatives seem pretty heuristic to most, I wanted to go through the psuedo-SIL for the Forward mode derivative of our function, in detail. Reason being that the pseudo-SIL for the Reverse mode derivative does not look all that different, structurally, and perhaps now it might be easier to focus on some of the stickier points of Reverse AD that make it harder to understand.</p>
+</blockquote>
+<h4 id="reverse-mode">Reverse mode</h4>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span style="font-style:italic;color:#5c6773;">// Inputs -
+</span><span style="font-style:italic;color:#5c6773;">// 1. Same as the input to the original function
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">// Outputs -
+</span><span style="font-style:italic;color:#5c6773;">// 1. The result of the original function
+</span><span style="font-style:italic;color:#5c6773;">// 2. The derivative function
+</span><span>sil @do_rev_f </span><span style="color:#f29668;">:</span><span> $(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">, </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) {
+</span><span style="color:#ffb454;">bb0</span><span>(</span><span style="color:#f29668;">%</span><span>x)</span><span style="color:#f29668;">:
+</span><span>(</span><span style="color:#f29668;">%</span><span>w0</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_rev_sin) </span><span style="color:#f29668;">=</span><span> apply @</span><span style="color:#ffb454;">do_rev_sin</span><span>(</span><span style="color:#f29668;">%</span><span>x)
+</span><span>(</span><span style="color:#f29668;">%</span><span>w1</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_rev_cos) </span><span style="color:#f29668;">=</span><span> apply @</span><span style="color:#ffb454;">do_rev_cos</span><span>(</span><span style="color:#f29668;">%</span><span>x)
+</span><span>(</span><span style="color:#f29668;">%</span><span>w2</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_rev_mul) </span><span style="color:#f29668;">=</span><span> apply @</span><span style="color:#ffb454;">do_rev_mul</span><span>(</span><span style="color:#f29668;">%</span><span>y1</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>y2)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Inputs - 
+</span><span style="font-style:italic;color:#5c6773;">// 1. Value of the seed dy/dy
+</span><span style="font-style:italic;color:#5c6773;">//
+</span><span style="font-style:italic;color:#5c6773;">// Outputs -
+</span><span style="font-style:italic;color:#5c6773;">// 1. Derivative of y/f(x) w.r.t x 
+</span><span style="color:#f29668;">%</span><span>df_rev_f </span><span style="color:#f29668;">= %</span><span>(seed) </span><span style="color:#f29668;">-&gt; </span><span>{
+</span><span>(</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw0`</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw1`) </span><span style="color:#f29668;">+= %</span><span style="color:#ffb454;">df_rev_mul</span><span>(</span><span style="color:#f29668;">%</span><span>seed)
+</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">+= %</span><span style="color:#ffb454;">df_rev_sin</span><span>(</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw0`)
+</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">+= %</span><span style="color:#ffb454;">df_rev_cos</span><span>(</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw1`)
+</span><span style="color:#ff7733;">return </span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dx`
+</span><span>}
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// Return tuple of original result and pullback.
+</span><span style="color:#ff7733;">return </span><span>(</span><span style="color:#f29668;">%</span><span>w2</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>df_rev_f)
+</span><span>}
+</span></code></pre>
+<p>Let’s now go over the Reverse mode derivative code in small chunks.</p>
+<h5 id="chunk-1-1">Chunk 1</h5>
+<pre data-lang="c9" style="background-color:#0f1419;color:#bfbab0;" class="language-c9 "><code class="language-c9" data-lang="c9"><span>(%w0, %df_rev_sin) = apply @do_rev_sin(%x)
+</span><span>(%w1, %df_rev_cos) = apply @do_rev_cos(%x)
+</span><span>(%w2, %df_rev_mul) = apply @do_rev_mul(%w0, %w1)
+</span></code></pre>
+<p>Same as chunk 1 of Forward AD. The only difference is that we're calling Reverse mode &quot;differentiating&quot; functions for each of the axiomatically differentiable functions, which return Reverse mode derivative functions.</p>
+<h5 id="chunk-2-1">Chunk 2</h5>
+<pre data-lang="c19" style="background-color:#0f1419;color:#bfbab0;" class="language-c19 "><code class="language-c19" data-lang="c19"><span>%df_rev_f = %(seed) -&gt; {
+</span><span>(%`dy/dw0`, %`dy/dw1`) += %df_rev_mul(%seed)
+</span><span>%`dy/dx` += %df_rev_sin(%`dy/dw0`)
+</span><span>%`dy/dx` += %df_rev_cos(%`dy/dw1`)
+</span><span>return %`dy/dx`
+</span><span>}
+</span></code></pre>
+<p>The compiler generated Reverse mode derivative of <code>f(x)</code> is similar to steps (3) &amp; (4) of by-hand Reverse AD. Like Forward AD, we can show that the chunk 2 of Reverse AD also produces the same result as that of by-hand Reverse AD by using the compiler known definitions for the derivatives of <a href="https://github.com/apple/swift/blob/5b8553cbe76b51b1811891b1fe83e28db1666932/stdlib/public/Differentiation/TgmathDerivatives.swift.gyb#L183"><code>sin(x)</code></a>, <a href="https://github.com/apple/swift/blob/5b8553cbe76b51b1811891b1fe83e28db1666932/stdlib/public/Differentiation/TgmathDerivatives.swift.gyb#L188"><code>cos(x)</code></a> and <a href="https://github.com/apple/swift/blob/047ffd57ac13af687812114ea437e4055924dcb0/stdlib/public/Differentiation/FloatingPointDifferentiation.swift.gyb#L188"><code>x*y</code></a> inline.</p>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span style="color:#f29668;">%</span><span>df_rev_f </span><span style="color:#f29668;">= %</span><span>(seed) </span><span style="color:#f29668;">-&gt; </span><span>{
+</span><span style="font-style:italic;color:#5c6773;">// As in by-hand Reverse AD, let&#39;s assume that seed (dy/dy) were equal to 1
+</span><span>    
+</span><span style="font-style:italic;color:#5c6773;">// The same thing, as with the &#39;+&#39;s in by-hand Reverse AD,
+</span><span style="font-style:italic;color:#5c6773;">// is up with the &#39;+=&#39;s here. 
+</span><span style="font-style:italic;color:#5c6773;">// 
+</span><span style="font-style:italic;color:#5c6773;">// The derivative of a function w.r.t a variable t depends on all the 
+</span><span style="font-style:italic;color:#5c6773;">// terms where t appears. We&#39;re essentially accumulating the derivatives
+</span><span style="font-style:italic;color:#5c6773;">// of different terms where t appears into dy/dt.
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// %df_rev_sin = (%v) -&gt; { (&lt;ORIGINAL RHS&gt; * %v, &lt;ORIGINAL LHS&gt; * %v) }
+</span><span>(</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw0`</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw1`) </span><span style="color:#f29668;">+= %</span><span style="color:#ffb454;">df_rev_mul</span><span>(</span><span style="color:#f29668;">%</span><span>seed)
+</span><span>                        </span><span style="color:#f29668;">=&gt; </span><span>(</span><span style="color:#f07178;">cos</span><span>(x) </span><span style="color:#f29668;">* %</span><span>seed</span><span style="color:#bfbab0cc;">, </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* %</span><span>seed)
+</span><span>                        </span><span style="color:#f29668;">=&gt; </span><span>(</span><span style="color:#f07178;">cos</span><span>(x)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f07178;">sin</span><span>(x))
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// %df_rev_sin = (%v) -&gt; { %v * &lt;COS OF ORIGINAL INPUT&gt; }
+</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">+= %</span><span style="color:#ffb454;">df_rev_sin</span><span>(</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw0`)
+</span><span>          </span><span style="color:#f29668;">=&gt; %</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw0` </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>          </span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">cos</span><span>(x) </span><span style="color:#f29668;">* </span><span style="color:#f07178;">cos</span><span>(x)
+</span><span>
+</span><span style="font-style:italic;color:#5c6773;">// %df_rev_cos = (%v) -&gt; { %v * &lt;NEGATIVE SINE OF ORIGINAL INPUT&gt; }
+</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dx` </span><span style="color:#f29668;">+= %</span><span style="color:#ffb454;">df_rev_cos</span><span>(</span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw1`)
+</span><span>          </span><span style="color:#f29668;">=&gt; %</span><span>`dy</span><span style="color:#f29668;">/</span><span>dw1` </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x)
+</span><span>          </span><span style="color:#f29668;">=&gt; </span><span style="color:#f07178;">sin</span><span>(x) </span><span style="color:#f29668;">* -</span><span style="color:#f07178;">sin</span><span>(x)
+</span><span>    
+</span><span style="font-style:italic;color:#5c6773;">// %`dy/dx` = cos^2(x) - sin^2(x)
+</span><span>
+</span><span style="color:#ff7733;">return </span><span style="color:#f29668;">%</span><span>`dy</span><span style="color:#f29668;">/</span><span>dx`
+</span><span>}
+</span></code></pre>
+<h5 id="chunk-3-1">Chunk 3</h5>
+<pre data-lang="c26" style="background-color:#0f1419;color:#bfbab0;" class="language-c26 "><code class="language-c26" data-lang="c26"><span>return (%w2, %df_rev_f)
+</span></code></pre>
+<p>Pretty sure you understand what's going on here so I'll skip the ceremony!</p>
+<h2 id="real-sil-for-the-derivatives-of-f-x">Real SIL for the derivatives of <code>f(x)</code></h2>
+<p>Alright, I would say we're over the hump! Real SIL code, to be quite honest, is mostly syntactical restrictions imposed on our pseudo-SIL code. Let's take a look at it.</p>
+<blockquote>
+<p>Forward AD is not fully supported in the Swift compiler, so for now we will just be taking a look at the SIL for the Reverse AD functions.</p>
+</blockquote>
+<pre data-lang="swift" style="background-color:#0f1419;color:#bfbab0;" class="language-swift "><code class="language-swift" data-lang="swift"><span style="font-style:italic;color:#5c6773;">// Original Swift program defining f(x) = sin(x) * cos(x)
+</span><span style="color:#ff7733;">import </span><span style="font-style:italic;color:#39bae6;">_Differentiation
+</span><span style="color:#ff7733;">import </span><span style="font-style:italic;color:#39bae6;">Foundation
+</span><span>
+</span><span style="color:#ff7733;">@differentiable</span><span>(reverse)
+</span><span style="color:#ff7733;">func </span><span>f(x: </span><span style="font-style:italic;color:#39bae6;">Float</span><span>) </span><span style="color:#f29668;">-&gt; </span><span style="font-style:italic;color:#39bae6;">Float </span><span>{
+</span><span>    sin(x) </span><span style="color:#f29668;">*</span><span> cos(x)
+</span><span>}
+</span></code></pre>
+<p>Here's the differentiating SIL function for <code>f(x)</code>, annotated to show regions of pseudo-SIL that correspond to the real SIL here.</p>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span style="font-style:italic;color:#5c6773;">// Corresponding SIL
+</span><span>sil hidden @$do_rev_f </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) {
+</span><span style="font-style:italic;color:#5c6773;">// %0                                             // users: %16, %8, %1
+</span><span style="color:#ffb454;">bb0</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">0 </span><span style="color:#f29668;">:</span><span> $Float)</span><span style="color:#f29668;">:
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ========================= (%w0, %df_rev_sin) = apply @do_rev_sin(%x) ========================== //
+</span><span>    debug_value </span><span style="color:#f29668;">%</span><span style="color:#f29718;">0 </span><span style="color:#f29668;">:</span><span> $Float</span><span style="color:#bfbab0cc;">,</span><span> let</span><span style="color:#bfbab0cc;">,</span><span> name </span><span style="color:#c2d94c;">&quot;x&quot;</span><span style="color:#bfbab0cc;">,</span><span> argno </span><span style="color:#f29718;">1 </span><span style="font-style:italic;color:#5c6773;">// id: %1
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">2 </span><span style="color:#f29668;">=</span><span> metatype $@thin Float</span><span style="color:#f29668;">.</span><span>Type                 </span><span style="font-style:italic;color:#5c6773;">// user: %24
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// function_ref sin(_:)
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">3 </span><span style="color:#f29668;">=</span><span> function_ref @$s6Darwin3sinyS2fF </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %6
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">4 </span><span style="color:#f29668;">=</span><span> differentiability_witness_function [jvp] [reverse] [parameters </span><span style="color:#f29718;">0</span><span>] [results </span><span style="color:#f29718;">0</span><span>] @$s6Darwin3sinyS2fF </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %6
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">5 </span><span style="color:#f29668;">=</span><span> differentiability_witness_function [vjp] [reverse] [parameters </span><span style="color:#f29718;">0</span><span>] [results </span><span style="color:#f29718;">0</span><span>] @$s6Darwin3sinyS2fF </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %6
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">6 </span><span style="color:#f29668;">=</span><span> differentiable_function [parameters </span><span style="color:#f29718;">0</span><span>] [results </span><span style="color:#f29718;">0</span><span>] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">3 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float with_derivative {</span><span style="color:#f29668;">%</span><span style="color:#f29718;">4 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">5 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;
+</span><span> (Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)} </span><span style="font-style:italic;color:#5c6773;">// user: %7
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">7 </span><span style="color:#f29668;">=</span><span> differentiable_function_extract [vjp] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">6 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">differentiable</span><span>(reverse) @</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %8
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">8 </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#f29718;">7</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">0</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) </span><span style="font-style:italic;color:#5c6773;">// users: %10, %9
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">9 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">8 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">0 </span><span style="font-style:italic;color:#5c6773;">// user: %24
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">10 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">8 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">1 </span><span style="font-style:italic;color:#5c6773;">// user: %28
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ========================= (%w1, %df_rev_cos) = apply @do_rev_cos(%x) ========================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// function_ref cos(_:)
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">11 </span><span style="color:#f29668;">=</span><span> function_ref @$s6Darwin3cosyS2fF </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %14
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">12 </span><span style="color:#f29668;">=</span><span> differentiability_witness_function [jvp] [reverse] [parameters </span><span style="color:#f29718;">0</span><span>] [results </span><span style="color:#f29718;">0</span><span>] @$s6Darwin3cosyS2fF </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %14
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">13 </span><span style="color:#f29668;">=</span><span> differentiability_witness_function [vjp] [reverse] [parameters </span><span style="color:#f29718;">0</span><span>] [results </span><span style="color:#f29718;">0</span><span>] @$s6Darwin3cosyS2fF </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %14
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">14 </span><span style="color:#f29668;">=</span><span> differentiable_function [parameters </span><span style="color:#f29718;">0</span><span>] [results </span><span style="color:#f29718;">0</span><span>] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">11 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float with_derivative {</span><span style="color:#f29668;">%</span><span style="color:#f29718;">12 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">13 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float
+</span><span>) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)} </span><span style="font-style:italic;color:#5c6773;">// user: %15
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">15 </span><span style="color:#f29668;">=</span><span> differentiable_function_extract [vjp] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">14 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">differentiable</span><span>(reverse) @</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %16
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">16 </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#f29718;">15</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">0</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) </span><span style="font-style:italic;color:#5c6773;">// users: %18, %17
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">17 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">16 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">0 </span><span style="font-style:italic;color:#5c6773;">// user: %24
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">18 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">16 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">1 </span><span style="font-style:italic;color:#5c6773;">// user: %28
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //    
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ====================== (%w2, %df_rev_mul) = apply @do_rev_mul(%w0, %w1) ======================= //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// function_ref static Float.* infix(_:_:)
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">19 </span><span style="color:#f29668;">=</span><span> function_ref @$sSf1moiyS2f_SftFZ </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %22
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">20 </span><span style="color:#f29668;">=</span><span> differentiability_witness_function [jvp] [reverse] [parameters </span><span style="color:#f29718;">0 1</span><span>] [results </span><span style="color:#f29718;">0</span><span>] @$sSf1moiyS2f_SftFZ </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %22
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">21 </span><span style="color:#f29668;">=</span><span> differentiability_witness_function [vjp] [reverse] [parameters </span><span style="color:#f29718;">0 1</span><span>] [results </span><span style="color:#f29718;">0</span><span>] @$sSf1moiyS2f_SftFZ </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %22
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">22 </span><span style="color:#f29668;">=</span><span> differentiable_function [parameters </span><span style="color:#f29718;">0 1</span><span>] [results </span><span style="color:#f29718;">0</span><span>] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">19 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt;</span><span> Float with_derivative {</span><span style="color:#f29668;">%</span><span style="color:#f29718;">20 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @callee_guara
+</span><span style="color:#ffb454;">nteed </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float) </span><span style="color:#f29668;">-&gt;</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">21 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float))} </span><span style="font-style:italic;color:#5c6773;">// user: %23
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">23 </span><span style="color:#f29668;">=</span><span> differentiable_function_extract [vjp] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">22 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">differentiable</span><span>(reverse) @</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @noDerivative @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %24
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">24 </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#f29718;">23</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">9</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">17</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">2</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(method) (Float</span><span style="color:#bfbab0cc;">,</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @thin Float</span><span style="color:#f29668;">.</span><span>Type) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float)) </span><span style="font-style:italic;color:#5c6773;">// users: %26, %25
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">25 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">24 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float))</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">0 </span><span style="font-style:italic;color:#5c6773;">// user: %29
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">26 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">24 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float))</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">1 </span><span style="font-style:italic;color:#5c6773;">// user: %28
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //      
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// SIL does not exactly have the concept of lambdas. If your Swift code uses a lambda, in SIL there
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// is a separate function generated for it. 
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// 
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// Closures (or closure captures), however, do exist in SIL. That&#39;s how the derivative of f(x) uses 
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// the derivative functions of the intermediate variables. That&#39;s what is happening below with the
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// partial_apply SIL instruction.
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">27 </span><span style="color:#f29668;">=</span><span> function_ref @$s4test1f1xS2f_tFTJpSpSr </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float)) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %28
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">28 </span><span style="color:#f29668;">=</span><span> partial_apply [callee_guaranteed] </span><span style="color:#f29668;">%</span><span style="color:#f29718;">27</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">10</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">18</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">26</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float)) </span><span style="color:#f29668;">-&gt;</span><span> Floa
+</span><span>t </span><span style="font-style:italic;color:#5c6773;">// user: %29
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =================================== return (%w2, %df_rev_f) ===================================   
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">29 </span><span style="color:#f29668;">= </span><span style="color:#ffb454;">tuple </span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">25 </span><span style="color:#f29668;">:</span><span> $Float</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">28 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) </span><span style="font-style:italic;color:#5c6773;">// user: %30
+</span><span>  </span><span style="color:#ff7733;">return </span><span style="color:#f29668;">%</span><span style="color:#f29718;">29 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float) </span><span style="font-style:italic;color:#5c6773;">// id: %30
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>} </span><span style="font-style:italic;color:#5c6773;">// end sil function &#39;$do_rev_f&#39;
+</span></code></pre>
+<p>And here's the derivative function of <code>f(x)</code>, annotated to show regions of pseudo-SIL that correspond to the real SIL here.</p>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span style="font-style:italic;color:#5c6773;">// pullback of f(x:)
+</span><span>sil private @$s4test1f1xS2f_tFTJpSpSr </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">convention</span><span>(thin) (Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">,</span><span> @owned @</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float)) </span><span style="color:#f29668;">-&gt;</span><span> Float {
+</span><span style="font-style:italic;color:#5c6773;">// %0                                             // user: %4
+</span><span style="font-style:italic;color:#5c6773;">// %1                                             // users: %11, %10
+</span><span style="font-style:italic;color:#5c6773;">// %2                                             // users: %9, %8
+</span><span style="font-style:italic;color:#5c6773;">// %3                                             // users: %5, %4
+</span><span style="color:#ffb454;">bb0</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">0 </span><span style="color:#f29668;">:</span><span> $Float</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">1 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">2 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">3 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float))</span><span style="color:#f29668;">:
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ======================== (%`dy/dw0`, %`dy/dw1`) += %df_rev_mul(%seed) ========================= //
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">4 </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#f29718;">3</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">0</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float) </span><span style="font-style:italic;color:#5c6773;">// users: %7, %6
+</span><span>  strong_release </span><span style="color:#f29668;">%</span><span style="color:#f29718;">3 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt; </span><span>(Float</span><span style="color:#bfbab0cc;">,</span><span> Float) </span><span style="font-style:italic;color:#5c6773;">// id: %5
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">6 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">4 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">0      </span><span style="font-style:italic;color:#5c6773;">// user: %10
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">7 </span><span style="color:#f29668;">=</span><span> tuple_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">4 </span><span style="color:#f29668;">:</span><span> $(Float</span><span style="color:#bfbab0cc;">,</span><span> Float)</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29718;">1      </span><span style="font-style:italic;color:#5c6773;">// user: %8
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>      
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ============================= %`dy/dx` += %df_rev_sin(%`dy/dw0`) ==============================
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">8 </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#f29718;">2</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">7</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %12
+</span><span>  strong_release </span><span style="color:#f29668;">%</span><span style="color:#f29718;">2 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// id: %9
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ============================= %`dy/dx` += %df_rev_cos(%`dy/dw1`) ============================== //
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">10 </span><span style="color:#f29668;">=</span><span> apply </span><span style="color:#f29668;">%</span><span style="color:#f29718;">1</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">6</span><span>) </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// user: %13
+</span><span>  strong_release </span><span style="color:#f29668;">%</span><span style="color:#f29718;">1 </span><span style="color:#f29668;">:</span><span> $@</span><span style="color:#ffb454;">callee_guaranteed </span><span>(Float) </span><span style="color:#f29668;">-&gt;</span><span> Float </span><span style="font-style:italic;color:#5c6773;">// id: %11
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// Derivative of f(x) w.r.t being accumulated from all the terms where x appears in f(x)
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">12 </span><span style="color:#f29668;">=</span><span> struct_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">8 </span><span style="color:#f29668;">:</span><span> $Float</span><span style="color:#bfbab0cc;">,</span><span> #Float</span><span style="color:#f29668;">.</span><span>_value </span><span style="font-style:italic;color:#5c6773;">// user: %14
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">13 </span><span style="color:#f29668;">=</span><span> struct_extract </span><span style="color:#f29668;">%</span><span style="color:#f29718;">10 </span><span style="color:#f29668;">:</span><span> $Float</span><span style="color:#bfbab0cc;">,</span><span> #Float</span><span style="color:#f29668;">.</span><span>_value </span><span style="font-style:italic;color:#5c6773;">// user: %14
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">14 </span><span style="color:#f29668;">=</span><span> builtin </span><span style="color:#c2d94c;">&quot;fadd_FPIEEE32&quot;</span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">13 </span><span style="color:#f29668;">:</span><span> $Builtin</span><span style="color:#f29668;">.</span><span>FPIEEE32</span><span style="color:#bfbab0cc;">, </span><span style="color:#f29668;">%</span><span style="color:#f29718;">12 </span><span style="color:#f29668;">:</span><span> $Builtin</span><span style="color:#f29668;">.</span><span>FPIEEE32) </span><span style="color:#f29668;">:</span><span> $Builtin</span><span style="color:#f29668;">.</span><span>FPIEEE32 </span><span style="font-style:italic;color:#5c6773;">// user: %15
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// ======================================= return %`dy/dx` ======================================= //
+</span><span>  </span><span style="color:#f29668;">%</span><span style="color:#f29718;">15 </span><span style="color:#f29668;">= </span><span style="color:#ff7733;">struct</span><span> $</span><span style="color:#ffb454;">Float </span><span>(</span><span style="color:#f29668;">%</span><span style="color:#f29718;">14 </span><span style="color:#f29668;">:</span><span> $Builtin</span><span style="color:#f29668;">.</span><span>FPIEEE32)   </span><span style="font-style:italic;color:#5c6773;">// users: %16, %17
+</span><span>  debug_value </span><span style="color:#f29668;">%</span><span style="color:#f29718;">15 </span><span style="color:#f29668;">:</span><span> $Float</span><span style="color:#bfbab0cc;">,</span><span> let</span><span style="color:#bfbab0cc;">,</span><span> name </span><span style="color:#c2d94c;">&quot;x&quot;</span><span style="color:#bfbab0cc;">,</span><span> argno </span><span style="color:#f29718;">1 </span><span style="font-style:italic;color:#5c6773;">// id: %16
+</span><span>  </span><span style="color:#ff7733;">return </span><span style="color:#f29668;">%</span><span style="color:#f29718;">15 </span><span style="color:#f29668;">:</span><span> $Float                             </span><span style="font-style:italic;color:#5c6773;">// id: %17
+</span><span>  </span><span style="font-style:italic;color:#5c6773;">// =============================================================================================== //
+</span><span>} </span><span style="font-style:italic;color:#5c6773;">// end sil function &#39;$s4test1f1xS2f_tFTJpSpSr&#39;
+</span></code></pre>
+<h2 id="closing-thoughts">Closing thoughts</h2>
+<p>And that's a wrap! We automatically, Forward and Reverse, differentiated a very simple math function by hand and then saw that the SIL code generated by the Swift compiler for the same function does the same things that we did by hand. Hopefully, now you have a tangible sense of what a derivative looks like, from the perspective of the compiler.</p>
+<p>Thank you for reading!</p>
+<div class="footnote-definition" id="1"><sup class="footnote-definition-label">1</sup>
+<p>Gradients are basically the same thing as derivatives, but in the context of multivariate functions. See <a href="https://www.quora.com/What-s-the-difference-between-derivative-gradient-and-Jacobian">What is the difference between a gradient and a derivative?</a></p>
+</div>
+<div class="footnote-definition" id="2"><sup class="footnote-definition-label">2</sup>
+<p>While in our example the original function is indeed built only on axiomatic differentiation rules, in real Swift AD code a user-defined differentiable function can be built using other user-defined differentiable functions, and so on. </p>
+</div>
+<div class="footnote-definition" id="3"><sup class="footnote-definition-label">3</sup>
+<p><strong>What is a Jacobian</strong>: Let's say you have a function <code>z1 = f(x)</code>. There's just one derivative that you can calculate for <code>z1</code>: <code>dz/dx)</code>, which represents the rate of change of <code>z1</code> w.r.t <code>x</code>. Now let's say you have a function <code>z2 = f(x1, x2)</code>. There's 2 derivatives that you can calculate for <code>z2</code>: <code>d(z2)/dx1</code> and <code>d(z2)/dx2</code>, which represent the rate of change of <code>z2</code> w.r.t <code>x1</code> and <code>x2</code>. <code>d(z2)/dx1</code> and <code>d(z2)/dx2</code> are <code>z2</code>'s partial derivatives. Now, let's say you have a function <code>z3 =&gt; (y1, y2) = f(x1, x2)</code>. <code>z3</code> has 2 inputs as well as 2 outputs. To fully differentiate <code>z3</code>, you will need to calculate the partial derivatives w.r.t <code>y1</code> and <code>y2</code>. The derivative of <code>z3</code> can then be written in matrix form as follows -</p>
+</div>
+<pre data-lang="c" style="background-color:#0f1419;color:#bfbab0;" class="language-c "><code class="language-c" data-lang="c"><span>    [
+</span><span>        [ </span><span style="color:#ffb454;">d</span><span>(y1)</span><span style="color:#f29668;">/</span><span>dx1</span><span style="color:#bfbab0cc;">, </span><span style="color:#ffb454;">d</span><span>(y1)</span><span style="color:#f29668;">/</span><span>dx2 ]</span><span style="color:#bfbab0cc;">, </span><span style="font-style:italic;color:#5c6773;">// partial derivatives w.r.t y1
+</span><span>        [ </span><span style="color:#ffb454;">d</span><span>(y2)</span><span style="color:#f29668;">/</span><span>dx1</span><span style="color:#bfbab0cc;">, </span><span style="color:#ffb454;">d</span><span>(y2)</span><span style="color:#f29668;">/</span><span>dx2 ] </span><span style="font-style:italic;color:#5c6773;">// partial derivatives w.r.t y2
+</span><span>    ]
+</span></code></pre>
+<p>The above matrix is a Jacobian. It is literally just a representational form of the partial derivatives of a multivariate function with one or more outputs<sup class="footnote-reference"><a href="#4">4</a></sup>.</p>
+
+        </section>
+    </article>
+</main>
+
+
+    </div>
+</body>
+
+</html>
